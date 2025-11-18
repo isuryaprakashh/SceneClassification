@@ -1,7 +1,49 @@
-./DATASET/*
-./TEMPLATE/*
-./datasetdetails.txt
-./template.txt
-./.idea/*
-./.venv/*
-./_pycache/*
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Model artifacts (large files)
+artifacts/
+*.pt
+*.pth
+*.h5
+*.pkl
+
+# Dataset
+DATASET/
+
+# Template directory
+TEMPLATE/
+
+# Text files
+*.txt
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
