@@ -1,0 +1,7 @@
+./DATASET/*
+./TEMPLATE/*
+./datasetdetails.txt
+./template.txt
+./.idea/*
+./.venv/*
+./_pycache/*
