@@ -31,8 +31,9 @@ DATASET/
 # Template directory
 TEMPLATE/
 
-# Text files
+# Text files (except requirements.txt which is needed)
 *.txt
+!requirements.txt
 
 # Jupyter Notebook
 .ipynb_checkpoints
