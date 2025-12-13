@@ -12,8 +12,46 @@ def _infer_flatten_dim(conv_layers: nn.Sequential, input_size: int = 224) -> int
     return features.view(1, -1).shape[1]
 
 
+# --------------------------------------------------------------------
+#  ANN CLASSIFIER  (Fully Connected Neural Network)
+# --------------------------------------------------------------------
+class ANNClassifier(nn.Module):
+    """
+    Simple ANN (MLP) replacing CNN with fully-connected layers only.
+    Input: 224x224 RGB images → flatten → linear layers.
+    """
+
+    def __init__(self, num_classes: int, input_size: int = 224):
+        super().__init__()
+
+        self.flatten_dim = 3 * input_size * input_size  # 3×224×224 = 150,528
+
+        self.model = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(self.flatten_dim, 1024),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(512, 256),
+            nn.ReLU(),
+
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+
+# --------------------------------------------------------------------
+#  CNN REGULARIZED
+# --------------------------------------------------------------------
 class CNNRegularized(nn.Module):
     """Simple CNN with batchnorm + dropout."""
+
     def __init__(self, num_classes: int, input_size: int = 224, dropout=0.25):
         super().__init__()
 
@@ -56,8 +94,12 @@ class CNNRegularized(nn.Module):
         return self.classifier(self.conv_layers(x))
 
 
+# --------------------------------------------------------------------
+#  RESNET TRANSFER LEARNING
+# --------------------------------------------------------------------
 class ResNetTransfer(nn.Module):
     """Transfer learning ResNet18 pretrained."""
+
     def __init__(self, num_classes: int, input_size=224, dropout=0.3, pretrained=True):
         super().__init__()
 
@@ -83,4 +125,8 @@ class ResNetTransfer(nn.Module):
         return self.model(x)
 
 
-__all__ = ["CNNRegularized", "ResNetTransfer"]
+__all__ = [
+    "ANNClassifier",
+    "CNNRegularized",
+    "ResNetTransfer",
+]

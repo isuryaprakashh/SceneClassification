@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.amp import autocast, GradScaler  # new AMP API
+from torch.amp import autocast, GradScaler
 
 import Preprocess as pre
 import models1 as models
@@ -24,9 +24,11 @@ ARTIFACT_DIR = Path("artifacts")
 EPOCHS = 5
 LR = 1e-3
 WEIGHT_DECAY = 1e-5
-USE_TRANSFER_LEARNING = True
 
 
+# -----------------------------------------------------------
+# TRAIN ONE EPOCH
+# -----------------------------------------------------------
 def train_one_epoch(model, train_loader, optimizer, criterion, device, scaler=None, use_amp=False):
     model.train()
     total_loss, total_correct, total_items = 0.0, 0, 0
@@ -37,7 +39,7 @@ def train_one_epoch(model, train_loader, optimizer, criterion, device, scaler=No
 
         optimizer.zero_grad()
 
-        if use_amp and scaler is not None and device.type == "cuda":
+        if use_amp and scaler is not None:
             with autocast(device_type="cuda"):
                 outputs = model(images)
                 loss = criterion(outputs, labels)
@@ -59,6 +61,9 @@ def train_one_epoch(model, train_loader, optimizer, criterion, device, scaler=No
     return total_loss / len(train_loader), (total_correct / total_items) * 100
 
 
+# -----------------------------------------------------------
+# VALIDATION
+# -----------------------------------------------------------
 def evaluate(model, loader, criterion, device):
     model.eval()
     loss_sum, correct, total = 0, 0, 0
@@ -79,70 +84,104 @@ def evaluate(model, loader, criterion, device):
     return (correct / total) * 100, loss_sum / len(loader)
 
 
-def save_checkpoint(model_state, classes, image_size):
-    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+# -----------------------------------------------------------
+# SAVE CHECKPOINT
+# -----------------------------------------------------------
+def save_checkpoint(model_state, classes, image_size, model_name):
+    model_dir = ARTIFACT_DIR / model_name
+    model_dir.mkdir(parents=True, exist_ok=True)
+
     torch.save({
         "model_state": model_state,
-        "arch": "resnet_transfer",
+        "arch": model_name,
         "image_size": image_size,
-    }, ARTIFACT_DIR / "best_model.pt")
+    }, model_dir / "best_model.pt")
 
-    with open(ARTIFACT_DIR / "classes.json", "w") as f:
+    with open(model_dir / "classes.json", "w") as f:
         json.dump({"classes": classes}, f, indent=2)
 
-    print("✔ Saved best model!")
+    print(f"✔ Saved best model for {model_name}!")
 
 
-def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[INFO] Training on → {device}")
+# -----------------------------------------------------------
+# TRAIN SINGLE MODEL
+# -----------------------------------------------------------
+def train_model(model_name, ModelClass, num_classes, train_loader, val_loader, device, classes):
+    print("\n============================================")
+    print(f"🔵 Training Model → {model_name}")
+    print("============================================")
 
-    train_loader, val_loader, classes = pre.load_data(
-        DATA_DIR,
-        batch_size=32,
-        augment=True,
-        num_workers=min(8, os.cpu_count()),
-        max_images_per_class=None,
-    )
-
-    print(f"Classes: {classes}")
-
-    num_classes = len(classes)
-
-    if USE_TRANSFER_LEARNING:
-        model = models.ResNetTransfer(num_classes=num_classes).to(device)
-        optimizer = optim.Adam(model.parameters(), lr=LR * 0.1, weight_decay=WEIGHT_DECAY)
-    else:
-        model = models.CNNRegularized(num_classes=num_classes).to(device)
-        optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-
+    model = ModelClass(num_classes=num_classes).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     criterion = nn.CrossEntropyLoss()
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", factor=0.5, patience=2)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=2)
 
-    # ---------------------- FIXED AMP SCALER ----------------------
     use_amp = device.type == "cuda"
     scaler = GradScaler() if use_amp else None
-    # --------------------------------------------------------------
 
     best_acc = 0
 
     for epoch in range(1, EPOCHS + 1):
+
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, optimizer, criterion, device, scaler=scaler, use_amp=use_amp
+            model, train_loader, optimizer, criterion, device,
+            scaler=scaler, use_amp=use_amp
         )
         val_acc, val_loss = evaluate(model, val_loader, criterion, device)
 
-        print(f"[Epoch {epoch}/{EPOCHS}] "
-              f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
-              f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+        print(f"[{model_name}] Epoch {epoch}/{EPOCHS} | "
+              f"Train Acc: {train_acc:.2f}% | Val Acc: {val_acc:.2f}%")
 
         scheduler.step(val_loss)
 
         if val_acc > best_acc:
             best_acc = val_acc
-            save_checkpoint(model.state_dict(), classes, IMAGE_SIZE)
+            save_checkpoint(model.state_dict(), classes, IMAGE_SIZE, model_name)
+            print(f"🔥 Best {model_name} Accuracy Updated: {best_acc:.2f}%")
 
-    print(f"\n🎉 Final Best Accuracy: {best_acc:.2f}%\n")
+    return best_acc
+
+
+# -----------------------------------------------------------
+# MAIN FUNCTION
+# -----------------------------------------------------------
+def main():
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO] Using Device → {device}")
+
+    train_loader, val_loader, classes = pre.load_data(
+        DATA_DIR, batch_size=32, augment=True,
+        num_workers=min(8, os.cpu_count())
+    )
+
+    num_classes = len(classes)
+
+    MODELS = {
+        "ANNClassifier": models.ANNClassifier,
+        "CNNRegularized": models.CNNRegularized,
+        "ResNetTransfer": models.ResNetTransfer
+    }
+
+    results = {}
+
+    # Train all models
+    for model_name, ModelClass in MODELS.items():
+        acc = train_model(
+            model_name, ModelClass, num_classes,
+            train_loader, val_loader, device,
+            classes  # <-- FIXED (added classes here)
+        )
+        results[model_name] = acc
+
+    # Show final comparison
+    print("\n==================== MODEL COMPARISON ====================")
+    for name, acc in results.items():
+        print(f"{name} → {acc:.2f}%")
+
+    best_model = max(results, key=results.get)
+    print("\n🏆 BEST MODEL:", best_model, "→", f"{results[best_model]:.2f}%")
+    print("==========================================================\n")
 
 
 if __name__ == "__main__":
