@@ -5,4 +5,5 @@ matplotlib
 flask
 pillow
 certifi
-
+scikit-learn
+seaborn

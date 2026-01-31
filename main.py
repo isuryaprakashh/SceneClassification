@@ -4,7 +4,9 @@ ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=ce
 
 import os
 import json
+import time
 from pathlib import Path
+from datetime import datetime
 
 import torch
 import torch.nn as nn
@@ -143,9 +145,88 @@ def train_model(model_name, ModelClass, num_classes, train_loader, val_loader, d
 
 
 # -----------------------------------------------------------
+# TRAIN MODEL WITH DETAILED LOGGING
+# -----------------------------------------------------------
+def train_model_with_history(
+    model_name, ModelClass, num_classes, train_loader, val_loader, device, classes
+):
+    """
+    Train a model while recording detailed epoch-wise metrics.
+    
+    Returns:
+        best_acc: Best validation accuracy achieved
+        history: Dict containing training/validation metrics per epoch
+        training_time: Total training time in seconds
+    """
+    print("\n" + "=" * 60)
+    print(f"🔵 Training Model → {model_name}")
+    print("=" * 60)
+
+    model = ModelClass(num_classes=num_classes).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    criterion = nn.CrossEntropyLoss()
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=2)
+
+    use_amp = device.type == "cuda"
+    scaler = GradScaler() if use_amp else None
+
+    # History tracking
+    history = {
+        'train_loss': [],
+        'val_loss': [],
+        'train_acc': [],
+        'val_acc': [],
+        'learning_rates': [],
+    }
+    
+    best_acc = 0
+    start_time = time.time()
+
+    for epoch in range(1, EPOCHS + 1):
+        epoch_start = time.time()
+        
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, optimizer, criterion, device,
+            scaler=scaler, use_amp=use_amp
+        )
+        val_acc, val_loss = evaluate(model, val_loader, criterion, device)
+        
+        epoch_time = time.time() - epoch_start
+        current_lr = optimizer.param_groups[0]['lr']
+        
+        # Record history
+        history['train_loss'].append(train_loss)
+        history['val_loss'].append(val_loss)
+        history['train_acc'].append(train_acc)
+        history['val_acc'].append(val_acc)
+        history['learning_rates'].append(current_lr)
+
+        print(f"[{model_name}] Epoch {epoch}/{EPOCHS} | "
+              f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
+              f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}% | "
+              f"LR: {current_lr:.6f} | Time: {epoch_time:.1f}s")
+
+        scheduler.step(val_loss)
+
+        if val_acc > best_acc:
+            best_acc = val_acc
+            save_checkpoint(model.state_dict(), classes, IMAGE_SIZE, model_name)
+            print(f"🔥 Best {model_name} Accuracy Updated: {best_acc:.2f}%")
+
+    training_time = time.time() - start_time
+    print(f"\n✔ {model_name} training completed in {training_time:.1f}s")
+    
+    return best_acc, history, training_time
+
+
+# -----------------------------------------------------------
 # MAIN FUNCTION
 # -----------------------------------------------------------
 def main():
+    print("\n" + "=" * 60)
+    print("SCENE CLASSIFICATION - MODEL TRAINING")
+    print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 60)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Using Device → {device}")
@@ -156,6 +237,9 @@ def main():
     )
 
     num_classes = len(classes)
+    print(f"[INFO] Number of classes: {num_classes}")
+    print(f"[INFO] Training samples: {len(train_loader.dataset)}")
+    print(f"[INFO] Validation samples: {len(val_loader.dataset)}")
 
     MODELS = {
         "ANNClassifier": models.ANNClassifier,
@@ -164,24 +248,68 @@ def main():
     }
 
     results = {}
+    all_histories = {}
+    training_times = {}
 
     # Train all models
     for model_name, ModelClass in MODELS.items():
-        acc = train_model(
+        acc, history, train_time = train_model_with_history(
             model_name, ModelClass, num_classes,
-            train_loader, val_loader, device,
-            classes  # <-- FIXED (added classes here)
+            train_loader, val_loader, device, classes
         )
         results[model_name] = acc
+        all_histories[model_name] = history
+        training_times[model_name] = train_time
+
+    # Save training history for visualization
+    history_path = ARTIFACT_DIR / "training_history.json"
+    with open(history_path, "w") as f:
+        json.dump(all_histories, f, indent=2)
+    print(f"\n✔ Training history saved to: {history_path}")
 
     # Show final comparison
-    print("\n==================== MODEL COMPARISON ====================")
-    for name, acc in results.items():
-        print(f"{name} → {acc:.2f}%")
+    print("\n" + "=" * 60)
+    print("MODEL COMPARISON SUMMARY")
+    print("=" * 60)
+    print(f"{'Model':<20} {'Best Val Acc':>12} {'Train Time':>12}")
+    print("-" * 46)
+    for name in MODELS.keys():
+        acc = results[name]
+        t = training_times[name]
+        print(f"{name:<20} {acc:>11.2f}% {t:>11.1f}s")
 
     best_model = max(results, key=results.get)
-    print("\n🏆 BEST MODEL:", best_model, "→", f"{results[best_model]:.2f}%")
-    print("==========================================================\n")
+    print(f"\n🏆 BEST MODEL: {best_model} → {results[best_model]:.2f}%")
+    
+    # Save comprehensive results
+    summary = {
+        "training_date": datetime.now().isoformat(),
+        "device": str(device),
+        "epochs": EPOCHS,
+        "learning_rate": LR,
+        "weight_decay": WEIGHT_DECAY,
+        "image_size": IMAGE_SIZE,
+        "num_classes": num_classes,
+        "classes": classes,
+        "results": {
+            name: {
+                "best_val_accuracy": results[name],
+                "training_time_seconds": training_times[name],
+                "final_train_acc": all_histories[name]['train_acc'][-1],
+                "final_val_acc": all_histories[name]['val_acc'][-1],
+                "final_train_loss": all_histories[name]['train_loss'][-1],
+                "final_val_loss": all_histories[name]['val_loss'][-1],
+            }
+            for name in MODELS.keys()
+        },
+        "best_model": best_model,
+    }
+    
+    summary_path = ARTIFACT_DIR / "training_summary.json"
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"✔ Training summary saved to: {summary_path}")
+    print("=" * 60 + "\n")
 
 
 if __name__ == "__main__":
